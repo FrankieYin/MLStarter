@@ -1,5 +1,6 @@
 import random
 import numpy as np
+import logging, sys
 
 class Network(object):
     def __init__(self, sizes):
@@ -9,15 +10,8 @@ class Network(object):
         self.weights = [np.random.randn(y, x)
                         for x, y in zip(sizes[:-1], sizes[1:])]
 
-    def _feedforward(self, a):
-        """
-        calculate the output of the network
-        :param a: a numpy ndarray (n, 1)
-        :return: a single number corresponding to the output of the network
-        """
-        for b, w in zip(self.biases, self.weights):
-            a = self._sigmoid(np.dot(w, a) + b)
-        return a
+        # set up logging debugger
+        logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
             test_data=None):
@@ -35,9 +29,8 @@ class Network(object):
         n = len(training_data)
         for j in range(epochs):
             random.shuffle(training_data)
-            mini_batches = [
-                training_data[k:k + mini_batch_size]
-                for k in range(0, n, mini_batch_size)]
+            mini_batches = \
+                [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
             for mini_batch in mini_batches:
                 self._gradientDescent(mini_batch, learning_rate)
             if test_data:
@@ -54,43 +47,63 @@ class Network(object):
         The "mini_batch" is a list of tuples "(x, y)", and "learning_rate"
         is the learning rate.
         """
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
+        images = np.array([np.reshape(image, (784, )) for (image, label) in mini_batch]).transpose()
+        labels = np.array([np.reshape(label, (10, )) for (image, label) in mini_batch]).transpose()
 
-        for input, desired in mini_batch:
-            delta_nabla_b, delta_nabla_w = self._backprop(input, desired)
-            nabla_b = [nb + dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
-            nabla_w = [nw + dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
+        delta_nabla_b, delta_nabla_w = self._backprop(images, labels)
 
         self.weights = [w - (learning_rate / len(mini_batch)) * nw
-                        for w, nw in zip(self.weights, nabla_w)]
+                        for w, nw in zip(self.weights, delta_nabla_w)]
         self.biases = [b - (learning_rate / len(mini_batch)) * nb
-                       for b, nb in zip(self.biases, nabla_b)]
+                       for b, nb in zip(self.biases, delta_nabla_b)]
 
-    def _backprop(self, input, desired):
+    def _forwardprop(self, inputs):
+        """
+        :param inputs:
+        a matrix X = [x1, ... , xm], where xi is a single training input, 784*1
+
+        :return:
+        (A, Z), where A is a list of matrices of activations of each training input;
+        Z is the list of matrices of intermediate z values of each training input
+        """
+        activation = inputs
+        activations = [activation]
+        zs = []
+        for w, b in zip(self.weights, self.biases):
+            z = np.dot(w, activation) + b
+            zs.append(z)
+            activation = self._sigmoid(z)
+            activations.append(activation)
+
+        return (activations, zs)
+
+    def _backprop(self, image, label):
         """
         Return a tuple ``(nabla_b, nabla_w)`` representing the
         gradient for the cost function C_x.  ``nabla_b`` and
         ``nabla_w`` are layer-by-layer lists of numpy arrays, similar
         to ``self.biases`` and ``self.weights``.
+
+        :param image:
+        a matrix X = [x1, ... , xm], where xi is a single training input;
+        e.g. in our case, X is a 784*10 matrix, Xij is the activation of
+        ith input neuron in the jth training example
+
+        :param label:
+        a matrix Y = [y1, ... , ym], where yi is the label/desired output;
+        e.g. Y in this case is a 10*10 matrix, each yi is a 10*1 vector
+
+        :returns:
         """
+        nabla_b = [0 for i in range(len(self.biases))]
+        nabla_w = [0 for i in range(len(self.weights))]
 
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-
-        # feedforward
-        activation = input
-        activations = [input] # list to store all the activations, layer by layer
-        zs = [] # list to store all the z vectors, layer by layer
-        for b, w in zip(self.biases, self.weights):
-            z = np.dot(w, activation)+b
-            zs.append(z)
-            activation = self._sigmoid(z)
-            activations.append(activation)
+        activations, zs = self._forwardprop(image)
 
         # backward pass
-        delta = self._cost_derivative(activations[-1], desired) * self._sigmoid_prime(zs[-1])
-        nabla_b[-1] = delta
+        delta = self._cost_derivative(activations[-1], label) * self._sigmoid_prime(zs[-1])
+        error_b_sum = np.sum(delta, axis=1)
+        nabla_b[-1] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())
 
         # Note that the variable l in the loop below is used a little
@@ -100,13 +113,22 @@ class Network(object):
         # scheme in the book, used here to take advantage of the fact
         # that Python can use negative indices in lists.
         for l in range(2, self.num_layers):
-            z = zs[-l]
-            sp = self._sigmoid_prime(z)
-            delta = np.dot(self.weights[-l+1].transpose(), delta) * sp
-            nabla_b[-l] = delta
+            delta = np.dot(self.weights[-l+1].transpose(), delta) * self._sigmoid_prime(zs[-l])
+            error_b_sum = np.sum(delta, axis=1)
+            nabla_b[-l] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
             nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
 
         return (nabla_b, nabla_w)
+
+    def _feedforward(self, a):
+        """
+        calculate the output of the network
+        :param a: a numpy ndarray (n, 1)
+        :return: a single number corresponding to the output of the network
+        """
+        for b, w in zip(self.biases, self.weights):
+            a = self._sigmoid(np.dot(w, a) + b)
+        return a
 
     def _evaluate(self, test_data):
         """Return the number of test inputs for which the neural
@@ -120,6 +142,8 @@ class Network(object):
     def _cost_derivative(self, output_activations, y):
         """Return the vector of partial derivatives \partial C_x /
         \partial a for the output activations."""
+        # logging.info("outpur_actications: {0}".format(output_activations.shape))
+        # logging.info("y: {0}".format(y.shape))
         return (output_activations - y)
 
     def _sigmoid(self, z):
