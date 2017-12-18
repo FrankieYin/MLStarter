@@ -1,8 +1,16 @@
+
+# built-in libraries
 import random
-import numpy as np
 import logging, sys
 
+# third-party libraries
+import numpy as np
+
+# user-defined libraries
+import cost_functions as cf
+
 class Network(object):
+
     def __init__(self, sizes):
         self.num_layers = len(sizes)
         self.sizes = sizes
@@ -14,6 +22,7 @@ class Network(object):
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
+            cost_function=cf.MeanSquaredError,
             test_data=None):
         """
         Train the neural network using mini-batch stochastic
@@ -32,7 +41,7 @@ class Network(object):
             mini_batches = \
                 [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
             for mini_batch in mini_batches:
-                self._gradientDescent(mini_batch, learning_rate)
+                self._gradientDescent(mini_batch, learning_rate, cost_function)
             if test_data:
                 print(
                     "Epoch {0}: {1} / {2}".format(
@@ -40,7 +49,7 @@ class Network(object):
             else:
                 print("Epoch {0} complete".format(j))
 
-    def _gradientDescent(self, mini_batch, learning_rate):
+    def _gradientDescent(self, mini_batch, learning_rate, cost_function):
         """
         update the network's weights and biases by applying
         gradient descent using backpropagation to a single mini batch.
@@ -50,7 +59,7 @@ class Network(object):
         images = np.array([np.reshape(image, (784, )) for (image, label) in mini_batch]).transpose()
         labels = np.array([np.reshape(label, (10, )) for (image, label) in mini_batch]).transpose()
 
-        delta_nabla_b, delta_nabla_w = self._backprop(images, labels)
+        delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
         self.weights = [w - (learning_rate / len(mini_batch)) * nw
                         for w, nw in zip(self.weights, delta_nabla_w)]
@@ -77,7 +86,7 @@ class Network(object):
 
         return (activations, zs)
 
-    def _backprop(self, image, label):
+    def _backprop(self, image, label, cost_function):
         """
         Return a tuple ``(nabla_b, nabla_w)`` representing the
         gradient for the cost function C_x.  ``nabla_b`` and
@@ -101,7 +110,8 @@ class Network(object):
         activations, zs = self._forwardprop(image)
 
         # backward pass
-        delta = self._cost_derivative(activations[-1], label) * self._sigmoid_prime(zs[-1])
+        # TODO: add or change _cost_derivative function to all the cost function classes
+        delta = cost_function.cost_derivative(activations[-1], label) * self._sigmoid_prime(zs[-1])
         error_b_sum = np.sum(delta, axis=1)
         nabla_b[-1] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())
@@ -138,13 +148,6 @@ class Network(object):
         test_results = [(np.argmax(self._feedforward(x)), y)
                         for (x, y) in test_data]
         return sum(int(x == y) for (x, y) in test_results)
-
-    def _cost_derivative(self, output_activations, y):
-        """Return the vector of partial derivatives \partial C_x /
-        \partial a for the output activations."""
-        # logging.info("outpur_actications: {0}".format(output_activations.shape))
-        # logging.info("y: {0}".format(y.shape))
-        return (output_activations - y)
 
     def _sigmoid(self, z):
         return 1.0 / (1.0 + np.exp(-z))
