@@ -7,6 +7,8 @@ descent algorithm.
 """
 import numpy as np
 
+import activation_functions as af
+
 class MeanSquaredError(object):
 
     @staticmethod
@@ -17,12 +19,9 @@ class MeanSquaredError(object):
         return 0.5 * np.linalg.norm(a - y) ** 2
 
     @staticmethod
-    def cost_derivative(output_activations, y):
-        """Return the vector of partial derivatives \partial C_x /
-        \partial a for the output activations."""
-        # logging.info("outpur_actications: {0}".format(output_activations.shape))
-        # logging.info("y: {0}".format(y.shape))
-        return (output_activations - y)
+    def error(a, y, z):
+        return (a - y) * af.sigmoid_prime(z)
+
 
 class CrossEntropy(object):
 
@@ -36,3 +35,7 @@ class CrossEntropy(object):
         to the correct value (0.0).
         """
         return np.sum(np.nan_to_num(-y * np.log(a) - (1 - y) * np.log(1 - a)))
+
+    @staticmethod
+    def error(a, y, z):
+        return a - y

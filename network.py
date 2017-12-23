@@ -1,6 +1,6 @@
 
 # built-in libraries
-import random
+import random, math
 import logging, sys
 
 # third-party libraries
@@ -8,6 +8,7 @@ import numpy as np
 
 # user-defined libraries
 import cost_functions as cf
+import activation_functions as af
 
 class Network(object):
 
@@ -15,14 +16,15 @@ class Network(object):
         self.num_layers = len(sizes)
         self.sizes = sizes
         self.biases = [np.random.randn(y, 1) for y in sizes[1:]]
-        self.weights = [np.random.randn(y, x)
+        self.weights = [np.random.randn(y, x)/math.sqrt(x)
                         for x, y in zip(sizes[:-1], sizes[1:])]
 
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
-            cost_function=cf.MeanSquaredError,
+            lmbda = 0.0, # the regularisation constant
+            cost_function=cf.CrossEntropy,
             test_data=None):
         """
         Train the neural network using mini-batch stochastic
@@ -41,7 +43,7 @@ class Network(object):
             mini_batches = \
                 [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
             for mini_batch in mini_batches:
-                self._gradientDescent(mini_batch, learning_rate, cost_function)
+                self._gradientDescent(mini_batch, learning_rate, cost_function, n, lmbda)
             if test_data:
                 print(
                     "Epoch {0}: {1} / {2}".format(
@@ -49,7 +51,7 @@ class Network(object):
             else:
                 print("Epoch {0} complete".format(j))
 
-    def _gradientDescent(self, mini_batch, learning_rate, cost_function):
+    def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda):
         """
         update the network's weights and biases by applying
         gradient descent using backpropagation to a single mini batch.
@@ -61,7 +63,7 @@ class Network(object):
 
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
-        self.weights = [w - (learning_rate / len(mini_batch)) * nw
+        self.weights = [(1 - learning_rate * (lmbda/num_training)) * w - (learning_rate / len(mini_batch)) * nw
                         for w, nw in zip(self.weights, delta_nabla_w)]
         self.biases = [b - (learning_rate / len(mini_batch)) * nb
                        for b, nb in zip(self.biases, delta_nabla_b)]
@@ -81,7 +83,7 @@ class Network(object):
         for w, b in zip(self.weights, self.biases):
             z = np.dot(w, activation) + b
             zs.append(z)
-            activation = self._sigmoid(z)
+            activation = af.sigmoid(z)
             activations.append(activation)
 
         return (activations, zs)
@@ -110,8 +112,7 @@ class Network(object):
         activations, zs = self._forwardprop(image)
 
         # backward pass
-        # TODO: add or change _cost_derivative function to all the cost function classes
-        delta = cost_function.cost_derivative(activations[-1], label) * self._sigmoid_prime(zs[-1])
+        delta = cost_function.error(activations[-1], label, zs[-1])
         error_b_sum = np.sum(delta, axis=1)
         nabla_b[-1] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())
@@ -123,7 +124,7 @@ class Network(object):
         # scheme in the book, used here to take advantage of the fact
         # that Python can use negative indices in lists.
         for l in range(2, self.num_layers):
-            delta = np.dot(self.weights[-l+1].transpose(), delta) * self._sigmoid_prime(zs[-l])
+            delta = np.dot(self.weights[-l+1].transpose(), delta) * af.sigmoid_prime(zs[-l])
             error_b_sum = np.sum(delta, axis=1)
             nabla_b[-l] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
             nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
@@ -137,7 +138,7 @@ class Network(object):
         :return: a single number corresponding to the output of the network
         """
         for b, w in zip(self.biases, self.weights):
-            a = self._sigmoid(np.dot(w, a) + b)
+            a = af.sigmoid(np.dot(w, a) + b)
         return a
 
     def _evaluate(self, test_data):
@@ -148,11 +149,4 @@ class Network(object):
         test_results = [(np.argmax(self._feedforward(x)), y)
                         for (x, y) in test_data]
         return sum(int(x == y) for (x, y) in test_results)
-
-    def _sigmoid(self, z):
-        return 1.0 / (1.0 + np.exp(-z))
-
-    def _sigmoid_prime(self, z):
-        """Derivative of the sigmoid function."""
-        return self._sigmoid(z) * (1 - self._sigmoid(z))
 
