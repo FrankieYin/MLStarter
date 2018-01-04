@@ -16,16 +16,24 @@ class Network(object):
         self.num_layers = len(sizes)
         self.sizes = sizes
         self.biases = [np.random.randn(y, 1) for y in sizes[1:]]
-        self.weights = [np.random.randn(y, x)/math.sqrt(x)
+        self.weights = [np.random.randn(y, x)/math.sqrt(x) # standard deviation is squeezed down
                         for x, y in zip(sizes[:-1], sizes[1:])]
 
+        self.dropout_enabled = True
+        self.l2_enabled = True
+        self.dropout_size = 2 # 三贤者系统 vs 二分心智！
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
+    # TODO: use early stopping to determine the number of traning epoch; check if no-improvement-in-n-epoch
+    # TODO: implement a learning rate schedule (e.g halve the learning rate each time the accuracy satisfies early stopping)
+    # TODO: change to momentum-based stochastic gradient descent
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
             lmbda = 0.0, # the regularisation constant
             cost_function=cf.CrossEntropy,
-            test_data=None):
+            test_data=None,
+            dropout_enabled=True,
+            l2_enabled=True):
         """
         Train the neural network using mini-batch stochastic
         gradient descent.  The "training_data" is a list of tuples
@@ -36,8 +44,12 @@ class Network(object):
         epoch, and partial progress printed out.  This is useful for
         tracking progress, but slows things down substantially.
         """
+        self.dropout_enabled = dropout_enabled
+        self.l2_enabled = l2_enabled
+
         if test_data: n_test = len(test_data)
         n = len(training_data)
+
         for j in range(epochs):
             random.shuffle(training_data)
             mini_batches = \
@@ -61,12 +73,48 @@ class Network(object):
         images = np.array([np.reshape(image, (784, )) for (image, label) in mini_batch]).transpose()
         labels = np.array([np.reshape(label, (10, )) for (image, label) in mini_batch]).transpose()
 
+        # if we are using dropout for regularisation
+        if self.dropout_enabled:
+
+            # copy the current weights and biases for restoration later on
+            weights = [w for w in self.weights]
+            biases = [b for b in self.biases]
+            neurons_deleted = []
+
+            # we randomly choose some neurons in the hidden layer to delete
+            for i in range(1, self.num_layers-1):
+                n = self.sizes[i]
+                neurons_to_delete = random.sample(range(n), math.floor(n*(self.dropout_size-1)/self.dropout_size))
+                neurons_deleted.append(neurons_to_delete)
+                # delete rows in the weight matrix connecting to the previous layer
+                self.weights[i-1] = np.delete(self.weights[i-1], neurons_to_delete, axis=0)
+                self.biases[i-1] = np.delete(self.biases[i-1], neurons_to_delete, axis=0)
+                # delete columns in the weight matrix connecting to the next layer
+                self.weights[i] = np.delete(self.weights[i], neurons_to_delete, axis=1)
+
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
-        self.weights = [(1 - learning_rate * (lmbda/num_training)) * w - (learning_rate / len(mini_batch)) * nw
-                        for w, nw in zip(self.weights, delta_nabla_w)]
+        if self.l2_enabled:
+            # l2 regularisation, weight decay on weights
+            self.weights = [(1 - learning_rate * (lmbda/num_training)) * w - (learning_rate / len(mini_batch)) * nw
+                            for w, nw in zip(self.weights, delta_nabla_w)]
+        else:
+            self.weights = [w - (learning_rate / len(mini_batch)) * nw
+                            for w, nw in zip(self.weights, delta_nabla_w)]
         self.biases = [b - (learning_rate / len(mini_batch)) * nb
                        for b, nb in zip(self.biases, delta_nabla_b)]
+
+        if self.dropout_enabled:
+            # we restore the deleted neurons
+            for i in range(1, self.num_layers-1):
+                neurons_to_restore = neurons_deleted[i-1]
+                neurons_to_restore.sort() # sort to avoid index changing during insertion
+                for j in neurons_to_restore:
+                    # insert before current jth row
+                    self.weights[i-1] = np.insert(self.weights[i-1], j, weights[i-1][j], axis=0)
+                    self.biases[i-1] = np.insert(self.biases[i-1], j, biases[i-1][j], axis=0)
+                    # insert before current jth column
+                    self.weights[i] = np.insert(self.weights[i], j, weights[i][:, j], axis=1)
 
     def _forwardprop(self, inputs):
         """
@@ -138,7 +186,12 @@ class Network(object):
         :return: a single number corresponding to the output of the network
         """
         for b, w in zip(self.biases, self.weights):
-            a = af.sigmoid(np.dot(w, a) + b)
+            # To compensate for the increase in number of neurons activated
+            # we divide the weights and biases by the dropout size.
+            if self.dropout_enabled:
+                a = af.sigmoid(np.dot(w/self.dropout_size, a) + b/self.dropout_size)
+            else:
+                a = af.sigmoid(np.dot(w, a) + b)
         return a
 
     def _evaluate(self, test_data):
