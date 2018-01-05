@@ -22,6 +22,8 @@ class Network(object):
         self.dropout_enabled = True
         self.l2_enabled = True
         self.dropout_size = 2 # 三贤者系统 vs 二分心智！
+        self.no_improvement_tolerance = 10
+        self.significant_improvement_rate = 0.005
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
@@ -33,7 +35,8 @@ class Network(object):
             cost_function=cf.CrossEntropy,
             test_data=None,
             dropout_enabled=True,
-            l2_enabled=True):
+            l2_enabled=True,
+            early_stopping=False):
         """
         Train the neural network using mini-batch stochastic
         gradient descent.  The "training_data" is a list of tuples
@@ -50,6 +53,9 @@ class Network(object):
         if test_data: n_test = len(test_data)
         n = len(training_data)
 
+        best_accuracy = 0
+        best_epoch = None
+        no_improvement = 0
         for j in range(epochs):
             random.shuffle(training_data)
             mini_batches = \
@@ -57,11 +63,29 @@ class Network(object):
             for mini_batch in mini_batches:
                 self._gradientDescent(mini_batch, learning_rate, cost_function, n, lmbda)
             if test_data:
+                n_success = self._evaluate(test_data)
                 print(
                     "Epoch {0}: {1} / {2}".format(
-                        j, self._evaluate(test_data), n_test))
+                        j, n_success, n_test))
+
+                # early stopping using the no-improvement-in-n-epoch technique
+                # might change the early stopping technique in the future
+                if n_success > int(best_accuracy*(1+self.significant_improvement_rate)):
+                    best_accuracy = n_success
+                    best_epoch = j
+                    no_improvement = 0
+                else:
+                    no_improvement += 1
+                if early_stopping:
+                    if no_improvement >= self.no_improvement_tolerance:
+                        print("Stopping the network: no improvement in {0} epochs."
+                              .format(self.no_improvement_tolerance))
+                        break
             else:
                 print("Epoch {0} complete".format(j))
+
+        if test_data:
+            print("Best accuracy: {0}% on epoch {1}".format(best_accuracy*100/n_test, best_epoch))
 
     def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda):
         """
