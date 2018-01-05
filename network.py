@@ -19,24 +19,32 @@ class Network(object):
         self.weights = [np.random.randn(y, x)/math.sqrt(x) # standard deviation is squeezed down
                         for x, y in zip(sizes[:-1], sizes[1:])]
 
-        self.dropout_enabled = True
+        self.dropout_enabled = False
         self.l2_enabled = True
         self.dropout_size = 2 # 三贤者系统 vs 二分心智！
+
+        # The tolerance might be to aggressive, as some networks tend to plateau for some number of epochs
+        # only to then start improving again
         self.no_improvement_tolerance = 10
+        # we take the minor "improvements" as errors/fluctuations
         self.significant_improvement_rate = 0.005
+        # variable for learning rate schedule
+        self.slowdown_factor = 2
+
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
-    # TODO: use early stopping to determine the number of traning epoch; check if no-improvement-in-n-epoch
-    # TODO: implement a learning rate schedule (e.g halve the learning rate each time the accuracy satisfies early stopping)
     # TODO: change to momentum-based stochastic gradient descent
+    # TODO: grid search for hyper-parameters
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
             lmbda = 0.0, # the regularisation constant
             cost_function=cf.CrossEntropy,
             test_data=None,
-            dropout_enabled=True,
+            validation_data=None,
+            dropout_enabled=False,
             l2_enabled=True,
-            early_stopping=False):
+            early_stopping=False,
+            learning_schedule=True):
         """
         Train the neural network using mini-batch stochastic
         gradient descent.  The "training_data" is a list of tuples
@@ -56,7 +64,9 @@ class Network(object):
         best_accuracy = 0
         best_epoch = None
         no_improvement = 0
-        for j in range(epochs):
+        n_slowdown = 0
+        epoch = 1
+        while True:
             random.shuffle(training_data)
             mini_batches = \
                 [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
@@ -66,26 +76,47 @@ class Network(object):
                 n_success = self._evaluate(test_data)
                 print(
                     "Epoch {0}: {1} / {2}".format(
-                        j, n_success, n_test))
+                        epoch, n_success, n_test))
 
-                # early stopping using the no-improvement-in-n-epoch technique
-                # might change the early stopping technique in the future
                 if n_success > int(best_accuracy*(1+self.significant_improvement_rate)):
                     best_accuracy = n_success
-                    best_epoch = j
+                    best_epoch = epoch
                     no_improvement = 0
                 else:
                     no_improvement += 1
+
+                # Early-stopping using the no-improvement-in-n-epoch technique:
+                # Early-stopping helps to set the number of epochs (one of the less significant hyper-parameters).
+                # In particular, it means we don't need to explicitly think about how number of epochs depends on other
+                # hyper-parameters, it's taken care of automatically.
+                #
+                # At early stages, it's better to turn off early-stopping, as it helps to inform about overfitting and
+                # regularisation.
+                #
+                # Another way of early-stopping is to halve the learning_rate every time the conditions satisfy
+                # the no-improvement-in-n rules. When the learning_rate is 1/128 of the original value, we terminate.
                 if early_stopping:
                     if no_improvement >= self.no_improvement_tolerance:
-                        print("Stopping the network: no improvement in {0} epochs."
-                              .format(self.no_improvement_tolerance))
-                        break
+                        if learning_schedule:
+                            if n_slowdown == 7:
+                                break
+                            else:
+                                learning_rate /= self.slowdown_factor
+                                n_slowdown += 1
+                        else:
+                            print("Stopping the network: no improvement in {0} epochs."
+                                  .format(self.no_improvement_tolerance))
+                            break
+                elif epoch == epochs:
+                    break
             else:
-                print("Epoch {0} complete".format(j))
+                print("Epoch {0} complete".format(epoch))
+
+            epoch += 1
 
         if test_data:
             print("Best accuracy: {0}% on epoch {1}".format(best_accuracy*100/n_test, best_epoch))
+        print("Total epochs trained: {0}".format(epoch))
 
     def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda):
         """
