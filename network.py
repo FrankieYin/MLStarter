@@ -1,4 +1,3 @@
-
 # built-in libraries
 import random, math
 import logging, sys
@@ -18,16 +17,17 @@ class Network(object):
         self.biases = [np.random.randn(y, 1) for y in sizes[1:]]
         self.weights = [np.random.randn(y, x)/math.sqrt(x) # standard deviation is squeezed down
                         for x, y in zip(sizes[:-1], sizes[1:])]
+        self.velocity = [np.zeros((y, x)) for x, y in zip(sizes[:-1], sizes[1:])] # initial velocity
 
         self.dropout_enabled = False
         self.l2_enabled = True
         self.dropout_size = 2 # 三贤者系统 vs 二分心智！
 
-        # The tolerance might be to aggressive, as some networks tend to plateau for some number of epochs
+        # The tolerance might be too aggressive, as some networks tend to plateau for some number of epochs
         # only to then start improving again
         self.no_improvement_tolerance = 10
         # we take the minor "improvements" as errors/fluctuations
-        self.significant_improvement_rate = 0.005
+        self.significant_improvement_rate = 0.001
         # variable for learning rate schedule
         self.slowdown_factor = 2
 
@@ -37,7 +37,8 @@ class Network(object):
     # TODO: change to momentum-based stochastic gradient descent
     # TODO: grid search for hyper-parameters
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
-            lmbda = 0.0, # the regularisation constant
+            lmbda=0.0, # the regularisation constant
+            momentum_coefficient=0.0, # default to zero, in which case it's the standard gradient descent
             cost_function=cf.CrossEntropy,
             test_data=None,
             validation_data=None,
@@ -71,7 +72,7 @@ class Network(object):
             mini_batches = \
                 [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
             for mini_batch in mini_batches:
-                self._gradientDescent(mini_batch, learning_rate, cost_function, n, lmbda)
+                self._gradientDescent(mini_batch, learning_rate, cost_function, n, lmbda, momentum_coefficient)
             if test_data:
                 n_success = self._evaluate(test_data)
                 print(
@@ -103,6 +104,7 @@ class Network(object):
                             else:
                                 learning_rate /= self.slowdown_factor
                                 n_slowdown += 1
+                                no_improvement = 0
                         else:
                             print("Stopping the network: no improvement in {0} epochs."
                                   .format(self.no_improvement_tolerance))
@@ -118,7 +120,7 @@ class Network(object):
             print("Best accuracy: {0}% on epoch {1}".format(best_accuracy*100/n_test, best_epoch))
         print("Total epochs trained: {0}".format(epoch))
 
-    def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda):
+    def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda, mu):
         """
         update the network's weights and biases by applying
         gradient descent using backpropagation to a single mini batch.
@@ -149,13 +151,15 @@ class Network(object):
 
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
+        # update velocity with damping and then update weights using velocity
+        self.velocity = [mu * v - (learning_rate / len(mini_batch)) * nw
+                         for v, nw in zip(self.velocity, delta_nabla_w)]
         if self.l2_enabled:
             # l2 regularisation, weight decay on weights
-            self.weights = [(1 - learning_rate * (lmbda/num_training)) * w - (learning_rate / len(mini_batch)) * nw
-                            for w, nw in zip(self.weights, delta_nabla_w)]
+            self.weights = [(1 - learning_rate * (lmbda/num_training)) * w + v
+                            for w, v in zip(self.weights, self.velocity)]
         else:
-            self.weights = [w - (learning_rate / len(mini_batch)) * nw
-                            for w, nw in zip(self.weights, delta_nabla_w)]
+            self.weights = [w + v for w, v in zip(self.weights, self.velocity)]
         self.biases = [b - (learning_rate / len(mini_batch)) * nb
                        for b, nb in zip(self.biases, delta_nabla_b)]
 
