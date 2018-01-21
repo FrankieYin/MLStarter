@@ -34,7 +34,6 @@ class Network(object):
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
-    # TODO: change to momentum-based stochastic gradient descent
     # TODO: grid search for hyper-parameters
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
             lmbda=0.0, # the regularisation constant
@@ -132,10 +131,10 @@ class Network(object):
 
         # if we are using dropout for regularisation
         if self.dropout_enabled:
-
             # copy the current weights and biases for restoration later on
             weights = [w for w in self.weights]
             biases = [b for b in self.biases]
+            velocity = [v for v in self.velocity]
             neurons_deleted = []
 
             # we randomly choose some neurons in the hidden layer to delete
@@ -146,8 +145,11 @@ class Network(object):
                 # delete rows in the weight matrix connecting to the previous layer
                 self.weights[i-1] = np.delete(self.weights[i-1], neurons_to_delete, axis=0)
                 self.biases[i-1] = np.delete(self.biases[i-1], neurons_to_delete, axis=0)
+                self.velocity[i-1] = np.delete(self.velocity[i-1], neurons_to_delete, axis=0)
                 # delete columns in the weight matrix connecting to the next layer
                 self.weights[i] = np.delete(self.weights[i], neurons_to_delete, axis=1)
+                # do the same for velocity
+                self.velocity[i] = np.delete(self.velocity[i], neurons_to_delete, axis=1)
 
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
@@ -172,8 +174,11 @@ class Network(object):
                     # insert before current jth row
                     self.weights[i-1] = np.insert(self.weights[i-1], j, weights[i-1][j], axis=0)
                     self.biases[i-1] = np.insert(self.biases[i-1], j, biases[i-1][j], axis=0)
+                    self.velocity[i-1] = np.insert(self.velocity[i-1], j, velocity[i-1][j], axis=0)
                     # insert before current jth column
                     self.weights[i] = np.insert(self.weights[i], j, weights[i][:, j], axis=1)
+                    self.velocity[i] = np.insert(self.velocity[i], j, velocity[i][:, j], axis=1)
+
 
     def _forwardprop(self, inputs):
         """
