@@ -18,7 +18,7 @@ class Network(object):
         self.weights = [np.random.randn(y, x)/math.sqrt(x) # standard deviation is squeezed down
                         for x, y in zip(sizes[:-1], sizes[1:])]
         self.velocity = [np.zeros((y, x)) for x, y in zip(sizes[:-1], sizes[1:])] # initial velocity
-
+        self.mask = [np.full((y, 1), 1) for y in sizes[1:]] # mask turned on by default
         self.dropout_enabled = False
         self.l2_enabled = True
         self.dropout_size = 2 # 三贤者系统 vs 二分心智！
@@ -129,27 +129,17 @@ class Network(object):
         images = np.array([np.reshape(image, (784, )) for (image, label) in mini_batch]).transpose()
         labels = np.array([np.reshape(label, (10, )) for (image, label) in mini_batch]).transpose()
 
-        # if we are using dropout for regularisation
+        # If we are using dropout for regularisation:
+        # Dropout implementation reference:
+        #
+        # Nitish Srivastava, Geoffrey Hinton, Alex Krizhevsky, Ilya Sutskever, and Ruslan Salakhutdinov. 2014.
+        # Dropout: a simple way to prevent neural networks from overfitting.
+        # J. Mach. Learn. Res. 15, 1 (January 2014), 1929-1958.
         if self.dropout_enabled:
-            # copy the current weights and biases for restoration later on
-            weights = [w for w in self.weights]
-            biases = [b for b in self.biases]
-            velocity = [v for v in self.velocity]
-            neurons_deleted = []
-
-            # we randomly choose some neurons in the hidden layer to delete
-            for i in range(1, self.num_layers-1):
-                n = self.sizes[i]
-                neurons_to_delete = random.sample(range(n), math.floor(n*(self.dropout_size-1)/self.dropout_size))
-                neurons_deleted.append(neurons_to_delete)
-                # delete rows in the weight matrix connecting to the previous layer
-                self.weights[i-1] = np.delete(self.weights[i-1], neurons_to_delete, axis=0)
-                self.biases[i-1] = np.delete(self.biases[i-1], neurons_to_delete, axis=0)
-                self.velocity[i-1] = np.delete(self.velocity[i-1], neurons_to_delete, axis=0)
-                # delete columns in the weight matrix connecting to the next layer
-                self.weights[i] = np.delete(self.weights[i], neurons_to_delete, axis=1)
-                # do the same for velocity
-                self.velocity[i] = np.delete(self.velocity[i], neurons_to_delete, axis=1)
+            self.mask = [np.random.binomial(1, 1/self.dropout_size, (y, 1))
+                         for y in self.sizes[1:-1]]
+            # to make the shape consistent
+            self.mask.append(np.full((self.sizes[-1], 1), 1))
 
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
 
@@ -165,21 +155,6 @@ class Network(object):
         self.biases = [b - (learning_rate / len(mini_batch)) * nb
                        for b, nb in zip(self.biases, delta_nabla_b)]
 
-        if self.dropout_enabled:
-            # we restore the deleted neurons
-            for i in range(1, self.num_layers-1):
-                neurons_to_restore = neurons_deleted[i-1]
-                neurons_to_restore.sort() # sort to avoid index changing during insertion
-                for j in neurons_to_restore:
-                    # insert before current jth row
-                    self.weights[i-1] = np.insert(self.weights[i-1], j, weights[i-1][j], axis=0)
-                    self.biases[i-1] = np.insert(self.biases[i-1], j, biases[i-1][j], axis=0)
-                    self.velocity[i-1] = np.insert(self.velocity[i-1], j, velocity[i-1][j], axis=0)
-                    # insert before current jth column
-                    self.weights[i] = np.insert(self.weights[i], j, weights[i][:, j], axis=1)
-                    self.velocity[i] = np.insert(self.velocity[i], j, velocity[i][:, j], axis=1)
-
-
     def _forwardprop(self, inputs):
         """
         :param inputs:
@@ -192,10 +167,10 @@ class Network(object):
         activation = inputs
         activations = [activation]
         zs = []
-        for w, b in zip(self.weights, self.biases):
+        for w, b, r in zip(self.weights, self.biases, self.mask):
             z = np.dot(w, activation) + b
             zs.append(z)
-            activation = af.sigmoid(z)
+            activation = r * af.sigmoid(z)
             activations.append(activation)
 
         return (activations, zs)
@@ -224,7 +199,7 @@ class Network(object):
         activations, zs = self._forwardprop(image)
 
         # backward pass
-        delta = cost_function.error(activations[-1], label, zs[-1])
+        delta = self.mask[-1] * cost_function.error(activations[-1], label, zs[-1])
         error_b_sum = np.sum(delta, axis=1)
         nabla_b[-1] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())
@@ -236,7 +211,7 @@ class Network(object):
         # scheme in the book, used here to take advantage of the fact
         # that Python can use negative indices in lists.
         for l in range(2, self.num_layers):
-            delta = np.dot(self.weights[-l+1].transpose(), delta) * af.sigmoid_prime(zs[-l])
+            delta = self.mask[-l] * np.dot(self.weights[-l+1].transpose(), delta) * af.sigmoid_prime(zs[-l])
             error_b_sum = np.sum(delta, axis=1)
             nabla_b[-l] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
             nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
