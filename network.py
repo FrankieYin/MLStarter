@@ -11,7 +11,7 @@ import activation_functions as af
 
 class Network(object):
 
-    def __init__(self, sizes):
+    def __init__(self, sizes, cost_function=cf.CrossEntropy):
         self.num_layers = len(sizes)
         self.sizes = sizes
         self.biases = [np.random.randn(y, 1) for y in sizes[1:]]
@@ -31,6 +31,8 @@ class Network(object):
         # variable for learning rate schedule
         self.slowdown_factor = 2
 
+        self.cost_function = cost_function
+
         # set up logging debugger
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
@@ -38,13 +40,14 @@ class Network(object):
     def sgd(self, training_data, epochs, mini_batch_size, learning_rate,
             lmbda=0.0, # the regularisation constant
             momentum_coefficient=0.0, # default to zero, in which case it's the standard gradient descent
-            cost_function=cf.CrossEntropy,
             test_data=None,
             validation_data=None,
             dropout_enabled=False,
             l2_enabled=True,
             early_stopping=False,
-            learning_schedule=True):
+            learning_schedule=True,
+            monitor_training_cost=False,
+            monitor_training_accuracy=False):
         """
         Train the neural network using mini-batch stochastic
         gradient descent.  The "training_data" is a list of tuples
@@ -66,17 +69,32 @@ class Network(object):
         no_improvement = 0
         n_slowdown = 0
         epoch = 1
+
+        # For plotting:
+        testing_accuracy = []
+        training_cost, training_accuracy = [], []
         while True:
             random.shuffle(training_data)
             mini_batches = \
                 [training_data[k:k + mini_batch_size] for k in range(0, n, mini_batch_size)]
             for mini_batch in mini_batches:
-                self._gradientDescent(mini_batch, learning_rate, cost_function, n, lmbda, momentum_coefficient)
+                self._gradient_descent(mini_batch, learning_rate, n, lmbda, momentum_coefficient)
+
+            if monitor_training_cost:
+                cost = self._total_cost(training_data, lmbda)
+                training_cost.append(cost)
+
+            if monitor_training_accuracy:
+                accuracy = self._evaluate(training_data)
+                training_accuracy.append(accuracy*100/n)
+
             if test_data:
                 n_success = self._evaluate(test_data)
                 print(
                     "Epoch {0}: {1} / {2}".format(
                         epoch, n_success, n_test))
+
+                testing_accuracy.append(n_success*100/n_test)
 
                 if n_success > int(best_accuracy*(1+self.significant_improvement_rate)):
                     best_accuracy = n_success
@@ -98,7 +116,7 @@ class Network(object):
                 if early_stopping:
                     if no_improvement >= self.no_improvement_tolerance:
                         if learning_schedule:
-                            if n_slowdown == 7:
+                            if n_slowdown == 3:
                                 break
                             else:
                                 learning_rate /= self.slowdown_factor
@@ -119,7 +137,7 @@ class Network(object):
             print("Best accuracy: {0}% on epoch {1}".format(best_accuracy*100/n_test, best_epoch))
         print("Total epochs trained: {0}".format(epoch))
 
-    def _gradientDescent(self, mini_batch, learning_rate, cost_function, num_training, lmbda, mu):
+    def _gradient_descent(self, mini_batch, learning_rate, num_training, lmbda, mu):
         """
         update the network's weights and biases by applying
         gradient descent using backpropagation to a single mini batch.
@@ -135,13 +153,21 @@ class Network(object):
         # Nitish Srivastava, Geoffrey Hinton, Alex Krizhevsky, Ilya Sutskever, and Ruslan Salakhutdinov. 2014.
         # Dropout: a simple way to prevent neural networks from overfitting.
         # J. Mach. Learn. Res. 15, 1 (January 2014), 1929-1958.
+        #
+        # Possibly another way of implementing dropout:
+        # For now 2^n different neural networks are trained in the training cycle, but among these networks few gets
+        # trained more than once, if at all.
+        # Proposal: For every thinned network, we train it for "n" epoch before moving on to sampling another thinned
+        # network.
+        # Possible outcomes: The training accuracy might increase, as each network gets to "learn more"
+        # TODO: implement dropout schedule, and conduct experiments on that
         if self.dropout_enabled:
-            self.mask = [np.random.binomial(1, 1/self.dropout_size, (y, 1))
+            self.mask = [np.random.binomial(1, 1 - 1/self.dropout_size, (y, 1))
                          for y in self.sizes[1:-1]]
             # to make the shape consistent
             self.mask.append(np.full((self.sizes[-1], 1), 1))
 
-        delta_nabla_b, delta_nabla_w = self._backprop(images, labels, cost_function)
+        delta_nabla_b, delta_nabla_w = self._backprop(images, labels)
 
         # update velocity with damping and then update weights using velocity
         self.velocity = [mu * v - (learning_rate / len(mini_batch)) * nw
@@ -175,7 +201,7 @@ class Network(object):
 
         return (activations, zs)
 
-    def _backprop(self, image, label, cost_function):
+    def _backprop(self, image, label):
         """
         Return a tuple ``(nabla_b, nabla_w)`` representing the
         gradient for the cost function C_x.  ``nabla_b`` and
@@ -199,7 +225,7 @@ class Network(object):
         activations, zs = self._forwardprop(image)
 
         # backward pass
-        delta = self.mask[-1] * cost_function.error(activations[-1], label, zs[-1])
+        delta = self.mask[-1] * self.cost_function.error(activations[-1], label, zs[-1])
         error_b_sum = np.sum(delta, axis=1)
         nabla_b[-1] = np.reshape(error_b_sum, (error_b_sum.shape[0], 1))
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())
@@ -233,12 +259,27 @@ class Network(object):
                 a = af.sigmoid(np.dot(w, a) + b)
         return a
 
-    def _evaluate(self, test_data):
+    def _evaluate(self, data):
         """Return the number of test inputs for which the neural
         network outputs the correct result. Note that the neural
         network's output is assumed to be the index of whichever
         neuron in the final layer has the highest activation."""
-        test_results = [(np.argmax(self._feedforward(x)), y)
-                        for (x, y) in test_data]
-        return sum(int(x == y) for (x, y) in test_results)
+        results = [(np.argmax(self._feedforward(x)), y)
+                        for (x, y) in data]
+        return sum(int(x == y) for (x, y) in results)
 
+    def _total_cost(self, data, lmbda):
+        """
+        Calculate the total cost of a data set.
+
+        :param lmbda: the regularisation constant
+        :return: the total cost of the network on a data set
+        """
+        cost = 0.0
+        for a, y in data:
+            a = self._feedforward(a)
+            cost += self.cost_function.cost(a, y)
+        cost += 0.5 * lmbda * sum(np.linalg.norm(w)**2 for w in self.weights) # see formula (85)
+        cost /= len(data)
+
+        return cost
