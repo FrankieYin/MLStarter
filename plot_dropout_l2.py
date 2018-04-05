@@ -7,6 +7,8 @@ between identification accuracy and hyperparameters.
 
 """
 
+import mnist_loader, network
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -50,9 +52,42 @@ def plot_random_points(n):
     plt.xlabel("x", fontweight="bold")
     ax_fit.yaxis.set_label_coords(-0.1, 0.5)
 
-def main():
-    plot_random_points(9)
+def regularisation_l2_dropout(l2, dropout):
+    train_data, validation_data, test_data = mnist_loader.load_data_wrapper()
+    net = network.Network([784, 70, 10])
+    accuracy, training_cost, training_accuracy, testing_accuracy = net.sgd(train_data, 400, 10, 0.5,
+                                lmbda=5.0,
+                                momentum_coefficient=0.1,
+                                test_data=test_data,
+                                dropout_enabled=dropout,
+                                l2_enabled=l2,
+                                early_stopping=False,
+                                monitor_testing_accuracy=True,
+                                monitor_training_accuracy=True,
+                                monitor_training_cost=True)
+
+    epochs = list(range(1, 401))
+    fig = plt.figure(1)
+    ax = fig.add_subplot(111)
+    plt.plot(epochs, training_cost)
+    plt.xlabel("Epoch")
+    plt.title("Cost on the training data")
+
+    fig = plt.figure(2)
+    ax = fig.add_subplot(111)
+    plt.plot(epochs, testing_accuracy)
+    plt.xlabel("Epoch")
+    plt.title("% Accuracy on the testing data")
+
+    fig = plt.figure(3)
+    ax = fig.add_subplot(111)
+    plt.plot(epochs, training_accuracy, label="Accuracy on training data")
+    plt.plot(epochs, testing_accuracy, label="Accuracy on testing data")
+    plt.legend()
     plt.show()
+
+def main():
+    regularisation_l2_dropout(True, True)
 
 if __name__ == '__main__':
     main()

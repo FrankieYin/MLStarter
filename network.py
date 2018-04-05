@@ -19,6 +19,9 @@ class Network(object):
                         for x, y in zip(sizes[:-1], sizes[1:])]
         self.velocity = [np.zeros((y, x)) for x, y in zip(sizes[:-1], sizes[1:])] # initial velocity
         self.mask = [np.full((y, 1), 1) for y in sizes[1:]] # mask turned on by default
+
+        self.dropout_schedule_count = 0
+        self.dropout_schedule = 3
         self.dropout_enabled = False
         self.l2_enabled = True
         self.dropout_size = 2 # 三贤者系统 vs 二分心智！
@@ -47,7 +50,8 @@ class Network(object):
             early_stopping=False,
             learning_schedule=True,
             monitor_training_cost=False,
-            monitor_training_accuracy=False):
+            monitor_training_accuracy=False,
+            monitor_testing_accuracy=False):
         """
         Train the neural network using mini-batch stochastic
         gradient descent.  The "training_data" is a list of tuples
@@ -85,7 +89,7 @@ class Network(object):
                 training_cost.append(cost)
 
             if monitor_training_accuracy:
-                accuracy = self._evaluate(training_data)
+                accuracy = self._evaluate(training_data, convert=True)
                 training_accuracy.append(accuracy*100/n)
 
             if test_data:
@@ -94,7 +98,8 @@ class Network(object):
                     "Epoch {0}: {1} / {2}".format(
                         epoch, n_success, n_test))
 
-                testing_accuracy.append(n_success*100/n_test)
+                if monitor_testing_accuracy:
+                    testing_accuracy.append(n_success*100/n_test)
 
                 if n_success > int(best_accuracy*(1+self.significant_improvement_rate)):
                     best_accuracy = n_success
@@ -137,6 +142,8 @@ class Network(object):
             print("Best accuracy: {0}% on epoch {1}".format(best_accuracy*100/n_test, best_epoch))
         print("Total epochs trained: {0}".format(epoch))
 
+        return best_accuracy*100/n_test, training_cost, training_accuracy, testing_accuracy
+
     def _gradient_descent(self, mini_batch, learning_rate, num_training, lmbda, mu):
         """
         update the network's weights and biases by applying
@@ -160,12 +167,14 @@ class Network(object):
         # Proposal: For every thinned network, we train it for "n" epoch before moving on to sampling another thinned
         # network.
         # Possible outcomes: The training accuracy might increase, as each network gets to "learn more"
-        # TODO: implement dropout schedule, and conduct experiments on that
         if self.dropout_enabled:
-            self.mask = [np.random.binomial(1, 1 - 1/self.dropout_size, (y, 1))
-                         for y in self.sizes[1:-1]]
-            # to make the shape consistent
-            self.mask.append(np.full((self.sizes[-1], 1), 1))
+            if self.dropout_schedule_count % self.dropout_schedule == 0:
+                self.mask = [np.random.binomial(1, 1 - 1/self.dropout_size, (y, 1))
+                             for y in self.sizes[1:-1]]
+                # to make the shape consistent
+                self.mask.append(np.full((self.sizes[-1], 1), 1))
+            else:
+                self.dropout_schedule_count += 1
 
         delta_nabla_b, delta_nabla_w = self._backprop(images, labels)
 
@@ -259,13 +268,17 @@ class Network(object):
                 a = af.sigmoid(np.dot(w, a) + b)
         return a
 
-    def _evaluate(self, data):
+    def _evaluate(self, data, convert=False):
         """Return the number of test inputs for which the neural
         network outputs the correct result. Note that the neural
         network's output is assumed to be the index of whichever
         neuron in the final layer has the highest activation."""
-        results = [(np.argmax(self._feedforward(x)), y)
-                        for (x, y) in data]
+        if convert:
+            results = [(np.argmax(self._feedforward(x)), np.argmax(y))
+                            for (x, y) in data]
+        else:
+            results = [(np.argmax(self._feedforward(x)), y)
+                       for (x, y) in data]
         return sum(int(x == y) for (x, y) in results)
 
     def _total_cost(self, data, lmbda):
